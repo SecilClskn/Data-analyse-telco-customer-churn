@@ -1,7 +1,5 @@
 # =============================================================================
-# ANALYSE COMPLETE - TELCO CUSTOMER CHURN  (VERSION AMÉLIORÉE)
-# Corrections : suppression NA, data leakage TotalCharges, clustering enrichi,
-# LR baseline, upsampling, recall, test de Schoenfeld, langage causal
+# ANALYSE COMPLETE - TELCO CUSTOMER CHURN  
 # =============================================================================
 
 # ---- 0. INSTALLER ET CHARGER LES PACKAGES ----------------------------------
@@ -26,7 +24,7 @@ cat("Tous les packages sont chargés !\n")
 
 if (!dir.exists("graphiques")) dir.create("graphiques")
 
-# Fonction utilitaire pour sauvegarder les graphiques
+# fonction utilitaire pour sauvegarder les graphiques
 sauvegarder_graph <- function(nom_fichier, largeur = 10, hauteur = 7) {
   ggsave(paste0("graphiques/", nom_fichier, ".png"),
          width = largeur, height = hauteur, dpi = 150, bg = "white")
@@ -45,7 +43,7 @@ donnees <- read.csv(
   na.strings = c("", " ", "NA")
 )
 
-# Convertir TotalCharges en numérique (il y a des espaces -> NA)
+# convertir TotalCharges en numérique (il y a des espaces -> NA)
 donnees$TotalCharges <- as.numeric(donnees$TotalCharges)
 
 cat("Valeurs manquantes :\n")
@@ -53,8 +51,6 @@ print(colSums(is.na(donnees))[colSums(is.na(donnees)) > 0])
 
 # ---- 1.1 Suppression des 11 lignes NA --------------------------------------
 # On SUPPRIME les 11 lignes (toutes avec tenure=0, soit 0.16% du dataset).
-# L'imputation TotalCharges = tenure × MonthlyCharges serait une approximation
-# discutable (ignore remises, frais d'installation, etc.).
 # 11 lignes sur 7043 = négligeable, la suppression est plus propre.
 
 n_avant <- nrow(donnees)
@@ -79,7 +75,7 @@ colonnes_texte <- c(
 )
 donnees[colonnes_texte] <- lapply(donnees[colonnes_texte], as.factor)
 
-# Supprimer l'ID client
+# supprimer l'ID client
 donnees_clean <- donnees[, !names(donnees) %in% "customerID"]
 
 cat("Dataset final :", nrow(donnees_clean), "x", ncol(donnees_clean), "\n")
@@ -272,7 +268,7 @@ sauvegarder_graph("10_scatter_tenure_charges")
 # =============================================================================
 cat("\n========== PARTIE 3 : PRÉPARATION DES FEATURES ==========\n")
 
-# Encodage dummy des variables catégorielles
+# encodage dummy des variables catégorielles
 donnees_ml <- donnees_clean %>%
   select(-Churn_bin) %>%
   mutate(across(where(is.factor), as.character))
@@ -280,10 +276,10 @@ donnees_ml <- donnees_clean %>%
 mat_dummy <- model.matrix(~ . - Churn - 1, data = donnees_ml)
 mat_dummy <- as.data.frame(mat_dummy)
 
-# Ajouter la cible
+# ajouter la cible
 mat_dummy$Churn <- donnees_clean$Churn
 
-# ---- Suppression de TotalCharges du pipeline ML ----------------------------
+# ---- suppression de TotalCharges du pipeline ML ----------------------------
 # Raison : TotalCharges ≈ tenure × MonthlyCharges (r=0.83 avec tenure).
 # Garder les 3 variables crée une redondance qui biaise l'importance des
 # variables et peut poser un problème de data leakage (TotalCharges encode
@@ -294,17 +290,17 @@ if ("TotalCharges" %in% names(mat_dummy)) {
   cat("TotalCharges exclu du pipeline ML (data leakage / colinéarité).\n")
 }
 
-# Normalisation des variables numériques restantes
+# normalisation des variables numériques restantes
 cols_num <- c("tenure", "MonthlyCharges")
 for (col in cols_num) {
   mat_dummy[[col]] <- scale(mat_dummy[[col]])[, 1]
 }
 
-# Nettoyage des noms de colonnes
+# nettoyage des noms de colonnes
 names(mat_dummy) <- make.names(names(mat_dummy))
 cat("Dimensions de la matrice ML :", nrow(mat_dummy), "x", ncol(mat_dummy), "\n")
 
-# Division 70/30 stratifiée
+# division 70/30 stratifiée
 set.seed(42)
 index_train <- createDataPartition(mat_dummy$Churn, p = 0.70, list = FALSE)
 train_data  <- mat_dummy[index_train, ]
@@ -317,8 +313,8 @@ cat("Train:", nrow(train_data), "| Test:", nrow(test_data), "\n")
 # =============================================================================
 cat("\n========== PARTIE 4 : CLUSTERING K-MEANS ==========\n")
 
-# Utiliser toutes les features (sans Churn) pour un clustering plus riche.
-# Les variables sont déjà centrées/réduites -> pas de re-normalisation.
+# utiliser toutes les features (sans Churn) pour un clustering plus riche.
+# les variables sont déjà centrées/réduites -> pas de re-normalisation.
 donnees_cluster <- mat_dummy %>% select(-Churn)
 
 # ---- GRAPHIQUE 11 : Variance expliquée par PCA (scree plot) ----------------
@@ -422,10 +418,10 @@ sauvegarder_graph("15_churn_cluster_contrat")
 # PARTIE 5 : MODÈLES DE CLASSIFICATION
 # =============================================================================
 
-# Paramètres de validation croisée avec upsampling
+# paramètres de validation croisée avec upsampling
 # sampling = "up" : sur-échantillonne la classe minoritaire (churners, 26.5%)
 # dans chaque fold d'entraînement pour améliorer le recall.
-# L'évaluation reste sur le test set original (non rééchantillonné).
+# evaluation reste sur le test set original (non rééchantillonné).
 ctrl <- trainControl(
   method          = "cv",
   number          = 5,
@@ -672,126 +668,8 @@ grid.arrange(
 sauvegarder_graph("22_matrices_confusion", largeur = 10, hauteur = 8)
 
 
-# =============================================================================
-# PARTIE 7 : ANALYSE DE SURVIE (KAPLAN-MEIER + COX)
-# =============================================================================
-cat("\n========== PARTIE 7 : ANALYSE DE SURVIE ==========\n")
 
-surv_obj <- Surv(time = donnees_clean$tenure, event = donnees_clean$Churn_bin)
 
-# ---- GRAPHIQUE 23 : KM global -----------------------------------------------
-km_global <- survfit(surv_obj ~ 1, data = donnees_clean)
-
-p_km_global <- ggsurvplot(
-  km_global, data = donnees_clean,
-  conf.int = TRUE, risk.table = TRUE,
-  palette = "#1565C0", ggtheme = theme_minimal(base_size = 12),
-  title = "Global Kaplan-Meier Survival Curve",
-  xlab = "Tenure (months)", ylab = "Retention Probability",
-  risk.table.title = "Customers at Risk", surv.median.line = "hv"
-)
-png("graphiques/23_survie_globale.png", width = 1200, height = 900, res = 120)
-print(p_km_global)
-dev.off()
-cat("  -> Graphique sauvegardé : 23_survie_globale\n")
-
-# ---- GRAPHIQUE 24 : KM par contrat ------------------------------------------
-km_contrat <- survfit(surv_obj ~ Contract, data = donnees_clean)
-p_km_contrat <- ggsurvplot(
-  km_contrat, data = donnees_clean, conf.int = TRUE, pval = TRUE,
-  risk.table = TRUE, legend.labs = levels(donnees_clean$Contract),
-  palette = c("#F44336","#FF9800","#4CAF50"), ggtheme = theme_minimal(base_size = 12),
-  title = "Survival by Contract Type",
-  xlab = "Tenure (months)", ylab = "Retention Probability"
-)
-png("graphiques/24_survie_contrat.png", width = 1300, height = 1000, res = 120)
-print(p_km_contrat)
-dev.off()
-cat("  -> Graphique sauvegardé : 24_survie_contrat\n")
-
-# ---- GRAPHIQUE 25 : KM par Internet -----------------------------------------
-km_internet <- survfit(surv_obj ~ InternetService, data = donnees_clean)
-p_km_internet <- ggsurvplot(
-  km_internet, data = donnees_clean, conf.int = TRUE, pval = TRUE,
-  risk.table = TRUE, legend.labs = levels(donnees_clean$InternetService),
-  palette = c("#F44336","#2196F3","#4CAF50"), ggtheme = theme_minimal(base_size = 12),
-  title = "Survival by Internet Service",
-  xlab = "Tenure (months)", ylab = "Retention Probability"
-)
-png("graphiques/25_survie_internet.png", width = 1300, height = 1000, res = 120)
-print(p_km_internet)
-dev.off()
-cat("  -> Graphique sauvegardé : 25_survie_internet\n")
-
-# ---- GRAPHIQUE 26 : KM Senior vs Non-Senior ---------------------------------
-km_senior <- survfit(surv_obj ~ SeniorCitizen, data = donnees_clean)
-p_km_senior <- ggsurvplot(
-  km_senior, data = donnees_clean, conf.int = TRUE, pval = TRUE,
-  risk.table = TRUE, legend.labs = c("Non-Senior","Senior"),
-  palette = c("#2196F3","#F44336"), ggtheme = theme_minimal(base_size = 12),
-  title = "Survival: Senior vs Non-Senior",
-  xlab = "Tenure (months)", ylab = "Retention Probability"
-)
-png("graphiques/26_survie_senior.png", width = 1300, height = 1000, res = 120)
-print(p_km_senior)
-dev.off()
-cat("  -> Graphique sauvegardé : 26_survie_senior\n")
-
-# ---- 7.5 Modèle de Cox ------------------------------------------------------
-cat("\n--- Modèle de Cox ---\n")
-cox_model <- coxph(
-  Surv(tenure, Churn_bin) ~ MonthlyCharges + Contract + InternetService +
-    SeniorCitizen + Partner + Dependents + PaperlessBilling,
-  data = donnees_clean
-)
-print(summary(cox_model))
-
-# ---- GRAPHIQUE 27 : Hazard Ratios -------------------------------------------
-cox_res <- as.data.frame(summary(cox_model)$coefficients)
-cox_ci  <- as.data.frame(summary(cox_model)$conf.int)
-cox_res$Variable    <- rownames(cox_res)
-cox_res$HR          <- cox_res[, 2]
-cox_res$lower       <- cox_ci[, 3]
-cox_res$upper       <- cox_ci[, 4]
-cox_res$significant <- cox_res[, 5] < 0.05
-
-# Note : l'HR de MonthlyCharges est < 1 (HR=0.971) alors que les churners ont
-# en moyenne des charges plus élevées en analyse descriptive.
-# Ce renversement d'effet est typique : après contrôle du type de contrat
-# et du service internet (qui sont confondeurs : fibre = prix élevé + fort churn),
-# l'effet net de MonthlyCharges seul devient légèrement protecteur.
-# Il s'agit d'une association conditionnelle, NON d'un effet causal.
-
-ggplot(cox_res, aes(x = reorder(Variable, HR), y = HR, color = significant)) +
-  geom_point(size = 4) +
-  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.3, linewidth = 1) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey50") +
-  coord_flip() +
-  scale_color_manual(values = c("FALSE" = "grey60", "TRUE" = "#D32F2F"),
-                     labels = c("Not significant", "Significant (p<0.05)")) +
-  labs(
-    title    = "Cox Model - Hazard Ratios (HR)",
-    subtitle = "HR > 1: associated with higher churn risk  |  HR < 1: associated with lower risk",
-    x = "", y = "Hazard Ratio", color = ""
-  ) +
-  theme_minimal(base_size = 12) + theme(legend.position = "bottom")
-sauvegarder_graph("27_cox_hazard_ratios", largeur = 11, hauteur = 8)
-
-# ---- 7.6 Test de l'hypothèse des risques proportionnels (Schoenfeld) --------
-# Le modèle de Cox suppose que les HR sont constants dans le temps.
-# Le test de Schoenfeld vérifie cette hypothèse : p > 0.05 -> hypothèse acceptable.
-cat("\n--- Test de Schoenfeld (hypothèse de proportionnalité) ---\n")
-cox_zph <- cox.zph(cox_model)
-print(cox_zph)
-
-# ---- GRAPHIQUE 28 : Résidus de Schoenfeld -----------------------------------
-p_schoenfeld <- ggcoxzph(cox_zph, font.main = 10, ggtheme = theme_minimal(base_size = 9))
-
-png("graphiques/28_schoenfeld_test.png", width = 1800, height = 1200, res = 120)
-do.call(gridExtra::grid.arrange, c(p_schoenfeld, ncol = 3,
-  list(top = "Schoenfeld Residuals - Proportional Hazards Assumption Check\n(Flat line = PH assumption satisfied)")))
-dev.off()
-cat("  -> Graphique sauvegardé : 28_schoenfeld_test\n")
 
 
 # =============================================================================
